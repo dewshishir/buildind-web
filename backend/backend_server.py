@@ -1,6 +1,6 @@
 """
 Flask backend for segmentation model inference
-Handles PyTorch model loading and prediction
+Production-ready for Render deployment
 """
 
 import os
@@ -11,12 +11,13 @@ import io
 import cv2
 import torch
 import numpy as np
+import gdown
 from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 # -------------------------------------------------
-# Add project root to Python path (IMPORTANT)
+# Add project root to Python path
 # -------------------------------------------------
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -41,12 +42,23 @@ MODEL_PATH = os.path.join(
 )
 
 IMG_SIZE = 512
-
-# -------------------------------------------------
-# Global model
-# -------------------------------------------------
 model = None
 
+# -------------------------------------------------
+# Download Model from Google Drive
+# -------------------------------------------------
+def download_model():
+    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+
+    if not os.path.exists(MODEL_PATH):
+        print("Downloading model from Google Drive...")
+
+        url = "https://drive.google.com/uc?id=1SIYgEU3UdMaxCN7G00sdv6PsBnuYfngH"
+        gdown.download(url, MODEL_PATH, quiet=False)
+
+        print("Model downloaded successfully.")
+    else:
+        print("Model already exists. Skipping download.")
 
 # -------------------------------------------------
 # Load Model
@@ -54,6 +66,8 @@ model = None
 def load_model():
     global model
     try:
+        download_model()
+
         model = SegModel.load_from_checkpoint(
             MODEL_PATH,
             map_location=torch.device("cpu")
@@ -69,41 +83,36 @@ def load_model():
         print(f"Error loading model: {e}")
         return False
 
-
 # -------------------------------------------------
 # Preprocessing
 # -------------------------------------------------
 def preprocess_image(image_array):
     resized = cv2.resize(image_array, (IMG_SIZE, IMG_SIZE))
-    tensor = torch.tensor(resized).permute(2, 0, 1).float() / 255.0
-    tensor = tensor.unsqueeze(0).to(DEVICE)
-    return tensor
-
+    resized = resized.astype(np.float32) / 255.0
+    tensor = torch.from_numpy(resized).permute(2, 0, 1).unsqueeze(0)
+    return tensor.to(DEVICE)
 
 # -------------------------------------------------
 # Inference
 # -------------------------------------------------
 def predict_mask(image_array):
-    with torch.no_grad():
+    with torch.inference_mode():
         tensor = preprocess_image(image_array)
         pred = model(tensor)
         pred = torch.sigmoid(pred)
         pred = (pred > 0.5).float()
     return pred.squeeze().cpu().numpy()
 
-
 # -------------------------------------------------
 # Base64 Helpers
 # -------------------------------------------------
 def base64_to_image(base64_str):
-    # Remove header if exists
     if "," in base64_str:
         base64_str = base64_str.split(",")[1]
 
     image_data = base64.b64decode(base64_str)
     image = Image.open(io.BytesIO(image_data)).convert("RGB")
     return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
 
 def numpy_to_base64(array):
     if array.dtype != np.uint8:
@@ -113,7 +122,6 @@ def numpy_to_base64(array):
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
-
 
 # -------------------------------------------------
 # Routes
@@ -125,7 +133,6 @@ def health_check():
         "device": str(DEVICE),
         "model_loaded": model is not None
     })
-
 
 @app.route("/api/predict", methods=["POST"])
 def predict():
@@ -155,7 +162,6 @@ def predict():
     except Exception as e:
         print(f"Inference error: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/api/predict-with-gt", methods=["POST"])
 def predict_with_gt():
@@ -199,15 +205,8 @@ def predict_with_gt():
         print(f"Inference error: {e}")
         return jsonify({"error": str(e)}), 500
 
-
 # -------------------------------------------------
-# Run Server
+# Load model when Gunicorn starts
 # -------------------------------------------------
-if __name__ == "__main__":
-    print("Loading model...")
-
-    if load_model():
-        print("Starting Flask server...")
-        app.run(debug=False, host="0.0.0.0", port=5000)
-    else:
-        print("Failed to load model")
+print("Initializing model...")
+load_model()
