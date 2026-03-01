@@ -2,8 +2,9 @@ Flask==2.3.3
 Flask-CORS==4.0.0
 gunicorn==21.2.0
 
-torch==2.0.1
-torchvision==0.15.2
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.0.1+cpu
+torchvision==0.15.2+cpu
 pytorch-lightning==2.0.6
 segmentation-models-pytorch==0.3.3
 
